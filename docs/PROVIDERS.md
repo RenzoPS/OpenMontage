@@ -62,7 +62,7 @@ PEXELS_API_KEY=              # Stock photos + videos
 PIXABAY_API_KEY=             # Stock photos + videos
 
 # GOOGLE (one key, multiple tools, generous TTS free tier)
-GOOGLE_API_KEY=              # Google TTS + Imagen + Lyria music + Gemini Omni/Veo video
+GOOGLE_API_KEY=              # Google TTS + Imagen + Lyria music + Gemini Omni/Veo video + Gemini STT (gemini_stt)
 
 # VOICE + MUSIC
 ELEVENLABS_API_KEY=          # TTS, music, sound effects (10K chars/month free)
@@ -76,6 +76,9 @@ DASHSCOPE_API_KEY=           # Alibaba DashScope (Qwen image gen, TTS, ASR with 
 # AZURE AI SPEECH (optional cloud STT + TTS; one key unlocks both directions)
 AZURE_SPEECH_KEY=            # Azure AI Speech — azure_stt (Fast Transcription) + azure_tts (neural narration)
 AZURE_SPEECH_REGION=         # Speech resource region, e.g. eastus
+
+# DEEPGRAM (optional cloud STT + TTS; one key unlocks both directions)
+DEEPGRAM_API_KEY=            # Deepgram — deepgram_stt (Nova-3) + deepgram_tts (Aura-2, regional Spanish voices)
 
 # MULTI-MODEL GATEWAY (one key, 6+ tools)
 FAL_KEY=                     # FLUX, Recraft, Kling, Veo, MiniMax video
@@ -786,11 +789,68 @@ costs about $0.015. OpenMontage estimates cost from character count. See
 
 ---
 
+### Deepgram — Speech-to-Text + Text-to-Speech (Shared Key)
+
+> **Cloud STT and TTS on one key.** Deepgram Nova-3 transcribes local audio or video with word-level timestamps, smart formatting and diarization; Deepgram Aura-2 generates natural narration, including **regional Spanish voices** (Argentine, Mexican, Colombian, Peninsular, Latin American). Optional: the local `transcriber` / `piper_tts` remain the default offline paths.
+
+**Tools unlocked:** `deepgram_stt`, `deepgram_tts`
+**Env vars:** `DEEPGRAM_API_KEY`
+
+#### Setup
+
+1. Sign in to the [Deepgram console](https://console.deepgram.com) (new accounts include free credit).
+2. Create a key under **API Keys**.
+3. Add to `.env`:
+   ```bash
+   DEEPGRAM_API_KEY=your-deepgram-api-key
+   ```
+
+#### API Notes
+
+Both directions are synchronous REST calls authenticated with
+`Authorization: Token ${DEEPGRAM_API_KEY}`:
+
+```text
+POST https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&utterances=true&language=es
+Content-Type: audio/* or video/*          (raw file bytes as the body)
+
+POST https://api.deepgram.com/v1/speak?model=aura-2-antonia-es&encoding=mp3
+Content-Type: application/json            ({"text": "..."})
+```
+
+`deepgram_stt` maps `results.utterances[]` onto the `transcriber` schema
+(segments + word_timestamps, using the smart-formatted `punctuated_word`), so
+it is a drop-in for `subtitle_gen`. `deepgram_tts` accepts voice aliases
+(`antonia`, `estrella`, `selena`, `aquila`, `sirio`, `diana`, `nestor`,
+`thalia`, `apollo`) or any Aura model name, plus `speed` (0.7–1.5). Aura has no
+SSML: pacing is controlled with punctuation and ellipses — see the
+`deepgram-text-to-speech` skill.
+
+#### What It Is Best For
+
+- Spanish narration with a specific regional accent (e.g. `aura-2-antonia-es`, es-AR)
+- Fast, inexpensive cloud transcription with real per-word confidence
+- Keyterm prompting for names and brands (Nova-3)
+- One key for both caption timing (STT) and narration (TTS)
+
+Not for: fully offline production (use `transcriber` / `piper_tts`), voice
+cloning (use `elevenlabs_tts`), or fine SSML prosody control (use `azure_tts`).
+
+#### Pricing
+
+Pay-as-you-go (Oct 2026): Nova-3 pre-recorded **$0.0048/min** (monolingual) or
+**$0.0058/min** (multilingual); Aura-2 **$0.030 per 1k characters**. A 45-second
+social video's narration costs about $0.01–0.02. OpenMontage estimates STT cost
+from the returned audio duration and TTS cost from character count. See
+[Deepgram pricing](https://deepgram.com/pricing) for current rates.
+
+---
+
 ### Google — TTS + Imagen + Music + Video (Shared Key)
 
 > **One key, five tools.** Google Cloud TTS has 700+ voices in 50+ languages — the strongest localization option. `google_imagen` supports both Imagen 4 and Gemini 2.5 Flash Image, including projects without Imagen catalog access. Google Lyria generates high-quality background music. Gemini Omni Flash supports conversational video editing, and direct Veo generation covers premium short video clips.
 
-**Tools unlocked:** `google_tts`, `google_imagen`, `google_music`, `gemini_omni_video`, `veo_video`
+**Tools unlocked:** `google_tts`, `google_imagen`, `google_music`, `gemini_omni_video`, `veo_video`, `gemini_stt`
 **Env var:** `GOOGLE_API_KEY` (or `GEMINI_API_KEY` — either works; `GEMINI_API_KEY` takes precedence)
 
 #### Setup
@@ -832,6 +892,30 @@ The free tiers apply *independently* — you get 1M Standard AND 1M WaveNet AND 
 | Gemini 2.5 Flash Image (`gemini-2.5-flash-image`) | $0.039 |
 
 **Free tier for Imagen:** None. Paid tier only.
+
+#### Gemini Speech-to-Text (`gemini_stt`)
+
+`gemini_stt` transcribes local audio/video with **Gemini 3.5 Transcribe**
+(`gemini-3.5-transcribe`): word-level timestamps, automatic language detection
+(85+ languages, code-switching) and optional speaker diarization. Output matches
+the `transcriber` schema, so it feeds `subtitle_gen` directly — the same role as
+`deepgram_stt` / `azure_stt`.
+
+- **Free tier:** available on a Google AI Studio key without billing (free-tier
+  content may be used to improve Google's products — do not send confidential
+  audio).
+- **Paid tier:** roughly $0.003/min audio input + $0.002/min text output.
+- **Limits:** with word timestamps or diarization, up to 30 minutes per file.
+
+```text
+interactions.create(model="gemini-3.5-transcribe",
+  input=[{"type": "audio", "uri": <Files API uri>, "mime_type": ...}],
+  generation_config={"transcription_config": {
+    "mode": {"type": "verbatim", "timestamp_granularities": ["word"]},
+    "language_codes": ["es-AR"]}})
+```
+
+See the `gemini-speech-to-text` skill for parameters and limits.
 
 To select the Gemini backend through the governed `image_selector`, pass
 `preferred_provider: "google_imagen"` and
